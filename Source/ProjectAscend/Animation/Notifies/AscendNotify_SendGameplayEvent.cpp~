@@ -1,0 +1,71 @@
+#include "Animation/Notifies/AscendNotify_SendGameplayEvent.h"
+
+#include "AbilitySystemBlueprintLibrary.h"
+#include "AbilitySystem/AscendAbilitySystemComponent.h"
+
+#include UE_INLINE_GENERATED_CPP_BY_NAME(AscendNotify_SendGameplayEvent)
+
+UAscendNotify_SendGameplayEvent::UAscendNotify_SendGameplayEvent()
+{
+#if WITH_EDITORONLY_DATA
+	bShouldFireInEditor = false;
+#endif
+
+	bIsNativeBranchingPoint = true;
+}
+
+FString UAscendNotify_SendGameplayEvent::GetNotifyName_Implementation() const
+{
+	TStringBuilder<128> NotifyNameBuilder{InPlace, TEXTVIEW("Ascend Gameplay Event: ")};
+
+#if WITH_EDITOR
+	if (!CustomDescription.IsNone())
+	{
+		NotifyNameBuilder << CustomDescription;
+	}
+	else
+#endif
+	{
+		NotifyNameBuilder << EventTag.GetTagName();
+	}
+
+	return FString{NotifyNameBuilder};
+}
+
+void UAscendNotify_SendGameplayEvent::Notify(
+	USkeletalMeshComponent* Mesh,
+	UAnimSequenceBase* Sequence,
+	const FAnimNotifyEventReference& NotifyEventReference)
+{
+	Super::Notify(Mesh, Sequence, NotifyEventReference);
+
+	if (!Mesh || !EventTag.IsValid())
+	{
+		return;
+	}
+
+	AActor* Owner = Mesh->GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	UAscendAbilitySystemComponent* AbilitySystem = nullptr;
+	if (!UAscendAbilitySystemComponent::TryGetAscendAbilitySystem(Owner, AbilitySystem))
+	{
+		return;
+	}
+
+	FGameplayEventData EventData;
+	EventData.EventTag = EventTag;
+	EventData.EventMagnitude = EventMagnitude;
+	EventData.Instigator = Owner;
+	EventData.Target = Owner;
+	EventData.OptionalObject = Sequence;
+	EventData.OptionalObject2 = Mesh;
+	EventData.ContextHandle = AbilitySystem->MakeEffectContext();
+	EventData.ContextHandle.AddSourceObject(Sequence);
+
+	// Notify-authored gameplay events let montages trigger ability logic without hard-coding montage assets in abilities.
+	UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(Owner, EventTag, EventData);
+}
