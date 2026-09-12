@@ -20,7 +20,7 @@ AAscendPlayerCharacter::AAscendPlayerCharacter(const FObjectInitializer& ObjectI
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 	
-	GetCharacterMovement()->bOrientRotationToMovement = true;
+	GetCharacterMovement()->bOrientRotationToMovement = false;
 	GetCharacterMovement()->RotationRate = FRotator(0.f, 640.f, 0.f);
 	GetCharacterMovement()->bConstrainToPlane = true;
 	GetCharacterMovement()->bSnapToPlaneAtStart = true;
@@ -40,6 +40,11 @@ AAscendPlayerCharacter::AAscendPlayerCharacter(const FObjectInitializer& ObjectI
 void AAscendPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	// Apply at runtime too, since existing Blueprints may have saved the old defaults.
+	bUseControllerRotationYaw = false;
+	GetCharacterMovement()->bOrientRotationToMovement = false;
+	GetCharacterMovement()->bUseControllerDesiredRotation = false;
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{

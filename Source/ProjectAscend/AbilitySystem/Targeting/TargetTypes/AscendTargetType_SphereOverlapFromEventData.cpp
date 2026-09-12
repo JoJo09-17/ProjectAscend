@@ -9,7 +9,7 @@
 
 namespace
 {
-	bool ResolveEventOrigin(const FGameplayEventData& EventData, const AActor* TargetingActor, FVector& OutOrigin)
+	bool ResolveSphereEventOrigin(const FGameplayEventData& EventData, const AActor* TargetingActor, FVector& OutOrigin)
 	{
 		if (const FHitResult* FoundHitResult = EventData.ContextHandle.GetHitResult())
 		{
@@ -47,7 +47,7 @@ void FAscendTargetType_SphereOverlapFromEventData::GetTargets(
 	}
 
 	FVector QueryOrigin = FVector::ZeroVector;
-	if (!ResolveEventOrigin(EventData, TargetingActor, QueryOrigin) || QueryOrigin.IsNearlyZero())
+	if (!ResolveSphereEventOrigin(EventData, TargetingActor, QueryOrigin) || QueryOrigin.IsNearlyZero())
 	{
 		return;
 	}
