@@ -28,7 +28,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<class UInputMappingContext> IMC_Default;
 
+	virtual void BeginPlay() override;
 	virtual void InitializeGAS() override;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|Smoothing")
+	bool bSmoothCameraFollow = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|Smoothing", meta=(ClampMin="0.1", ClampMax="50"))
+	float CameraFollowSpeed = 10.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|Smoothing", meta=(ClampMin="0"))
+	float CameraFollowMaxDistance = 150.f;
 	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode) override;
 
 	/** Applies or removes the matching GAS gameplay tag for the given movement mode. */

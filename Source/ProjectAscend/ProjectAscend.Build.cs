@@ -30,8 +30,10 @@ public class ProjectAscend : ModuleRules
 				"GameplayTasks",
 				"GameplayAbilities",
 				"AIModule",
+				"NavigationSystem",
 				"DataRegistry",
 				"Niagara",
+				"ProceduralMeshComponent",
 				"EnhancedInput",
 				"NetCore",
 				"UMG",
@@ -57,5 +59,9 @@ public class ProjectAscend : ModuleRules
 			new string[] {
 			}
 		);
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "AnimGraph", "BlueprintGraph", "AnimationBlueprintLibrary" });
+		}
 	}
 }

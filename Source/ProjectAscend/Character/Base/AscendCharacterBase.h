@@ -4,12 +4,17 @@
 #include "GameFramework/Character.h"
 #include "AbilitySystemInterface.h"
 #include "GameplayTagContainer.h"
+#include "Combat/AscendMeleeProfile.h"
 #include "AscendCharacterBase.generated.h"
 
 class UAscendAbilitySet;
+class UAscendMeleeCombatComponent;
+class UAscendMaterialControllerComponent;
 
 /** Broadcast when a character dies. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCharacterDied, AAscendCharacterBase*, Victim);
+DECLARE_MULTICAST_DELEGATE_OneParam(FAscendRangedAttackFinished, bool);
+DECLARE_MULTICAST_DELEGATE(FAscendRangedComboReady);
 
 /**
  * Base character for all actors that use the Gameplay Ability System.
@@ -27,7 +32,27 @@ public:
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	virtual void BeginPlay() override;
+	/** Plays the configured ranged attack; returns false while a previous shot is animating. */
+	bool PlayRangedAttackAnimation(bool bHeavy = false, float ChargeAlpha = 0.f, bool bContinueCombo = false);
+	bool CanAdvanceRangedCombo() const { return IsRangedAttacking() && !bRangedHeavyAttack && bRangedShotReleased && bRangedComboWindowOpen; }
+	void ReleaseRangedShot(class UAnimSequenceBase* Animation);
+	void SetRangedComboWindow(class UAnimSequenceBase* Animation, bool bOpen);
+	bool IsActiveRangedMontageInstance(int32 InstanceID) const { return IsRangedAttacking() && InstanceID == ActiveRangedMontageInstanceID; }
+	UFUNCTION(BlueprintPure, Category="Combat") float GetCombatAttackSpeed() const;
+	/** Cancels a normal attack for dodge, but refuses to cancel heavy attacks. */
+	bool TryInterruptNormalAttack();
+	UFUNCTION(BlueprintPure, Category="Combat")
+	bool IsRangedAttacking() const { return ActiveRangedMontage.IsValid(); }
+	bool IsRangedHeavyAttacking() const { return IsRangedAttacking() && bRangedHeavyAttack; }
+	FAscendRangedAttackFinished OnRangedAttackFinished;
+	FAscendRangedComboReady OnRangedComboReady;
 	virtual void PossessedBy(AController* NewController) override;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
+	TObjectPtr<UAscendMeleeCombatComponent> MeleeCombat;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Materials")
+	TObjectPtr<UAscendMaterialControllerComponent> MaterialController;
 
 	/** Broadcasts when this character dies. Use for quest systems, AI awareness, and UI updates. */
 	UPROPERTY(BlueprintAssignable, Category = "Combat")
@@ -69,6 +94,19 @@ protected:
 	FGameplayTag DeathAbilityTag;
 
 private:
+	friend class FAscendMeleeSweepTest;
+    friend class AAscendEnemyCharacter;
+	void OnRangedAttackEnded(class UAnimMontage* Montage, bool bInterrupted);
+	int32 RangedComboIndex = 0;
+	bool bRangedHeavyAttack = false;
+	bool bRangedShotReleased = false;
+	bool bRangedComboWindowOpen = false;
+	FAscendRangedAttack PendingRangedAttack;
+	FVector RangedShotDirection = FVector::ForwardVector;
+	void SpawnRangedProjectile(const FAscendRangedAttack& Attack, const FVector& Direction);
+	double LastRangedAttackTime = -100.0;
+	TWeakObjectPtr<class UAnimMontage> ActiveRangedMontage;
+	int32 ActiveRangedMontageInstanceID = INDEX_NONE;
 	bool bStartupAbilitiesGranted = false;
 	bool bDefaultAttributesApplied = false;
 	bool bIsDead = false;

@@ -7,6 +7,8 @@
 class UProjectileMovementComponent;
 class USphereComponent;
 class UStaticMeshComponent;
+class UAscendProjectileProfile;
+class UNiagaraComponent;
 
 /**
  * Lightweight, code-only projectile used by the starter ranged attacks.
@@ -22,9 +24,13 @@ public:
 	AAscendRangedProjectile();
 
 	/** Sets the projectile values before its first collision. */
-	void InitializeProjectile(const FVector& Direction, float InDamage, float InSpeed, float InRadius);
+	void InitializeProjectile(const FVector& Direction, float InDamage, float InSpeed, float InRadius, bool bInPierceEnemies = false);
+	void SetProjectileProfile(UAscendProjectileProfile* InProfile);
+
+virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
@@ -36,7 +42,17 @@ protected:
 		const FHitResult& Hit);
 
 private:
-	void ApplyDamageTo(AActor* Target);
+	friend class FAscendMeleeSweepTest;
+	UFUNCTION() void OnProjectileOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+	UFUNCTION() void OnRepPierceEnemies();
+	UFUNCTION() void OnRepProjectileProfile();
+	UPROPERTY(ReplicatedUsing=OnRepProjectileProfile) TObjectPtr<UAscendProjectileProfile> ProjectileProfile;
+	UPROPERTY() TObjectPtr<UNiagaraComponent> FlightFX;
+	UPROPERTY(ReplicatedUsing=OnRepPierceEnemies) bool bPierceEnemies = false;
+	TSet<TWeakObjectPtr<AActor>> PiercedActors;
+	UPROPERTY() TObjectPtr<class UStaticMesh> ArrowMesh;
+
+	void ApplyDamageTo(AActor* Target,const FHitResult* Impact = nullptr);
 
 	UPROPERTY(VisibleAnywhere, Category = "Projectile")
 	TObjectPtr<USphereComponent> CollisionComponent;

@@ -67,6 +67,15 @@ public:
 	void FireHeavyAttack(float ChargeAlpha = 0.0f);
 
 private:
+	friend class FAscendMeleeSweepTest;
+	void PrepareAttackFacing(bool bContinueCombo = false);
+	void HandleRangedAttackFinished(bool bInterrupted);
+	void ExecuteQueuedRangedAttack();
+	bool bQueuedRangedLight = false;
+	double QueuedRangedInputTime = 0.0;
+	FTimerHandle QueuedRangedAttackTimer;
+	FVector ResolveDodgeDirection() const;
+	FVector LastMoveDirection = FVector::ZeroVector;
 	void BindCombatActions();
 	void HandleMappedButton(const FInputActionValue& Value, int32 Command, bool bGamepad, bool bPressed);
 	void HandleGamepadStick(const FInputActionValue& Value, bool bMove);
@@ -83,13 +92,16 @@ private:
 	TWeakObjectPtr<AAscendEnemyCharacter> LockedTarget;
 	UPROPERTY(EditDefaultsOnly, Category = "Ascend|Gamepad", meta = (ClampMin = "100.0"))
 	float LockRange = 2000.0f;
+	/** A nearer target must beat the current one by this many units to avoid target flicker. */
+	UPROPERTY(EditDefaultsOnly, Category = "Ascend|Gamepad", meta = (ClampMin = "0.0"))
+	float AutoSwitchTargetHysteresis = 75.0f;
 	UPROPERTY(EditDefaultsOnly, Category = "Ascend|Gamepad")
 	float DodgeSpeed = 1600.0f;
 	UPROPERTY(EditDefaultsOnly, Category = "Ascend|Gamepad")
 	float DodgeDuration = 0.18f;
 	UPROPERTY(EditDefaultsOnly, Category = "Ascend|Gamepad")
 	float DodgeCooldown = 0.65f;
-	void UpdateMouseFacing();
+	void UpdateMouseFacing(bool bContinueCombo = false);
 	void FireRangedProjectile(float InDamage, float InSpeed, float InRadius);
 	UAscendAbilitySystemComponent* GetASC() const;
 

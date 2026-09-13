@@ -3,10 +3,12 @@
 #include "AbilitySystemInterface.h"
 #include "AbilitySystem/AscendAbilitySystemComponent.h"
 #include "Combat/AscendRangedProjectile.h"
+#include "Combat/AscendMeleeCombatComponent.h"
 #include "Input/AscendInputComponent.h"
 #include "Player/AscendAbilitySlotComponent.h"
 #include "InputCoreTypes.h"
 #include "Character/Enemy/AscendEnemyCharacter.h"
+#include "TimerManager.h"
 
 AAscendPlayerController::AAscendPlayerController()
 {
@@ -26,6 +28,13 @@ void AAscendPlayerController::SetupInputComponent()
 void AAscendPlayerController::OnPossess(APawn* aPawn)
 {
 	Super::OnPossess(aPawn);
+	if (auto* Avatar = Cast<AAscendCharacterBase>(aPawn))
+	{
+		Avatar->OnRangedAttackFinished.RemoveAll(this);
+		Avatar->OnRangedAttackFinished.AddUObject(this, &AAscendPlayerController::HandleRangedAttackFinished);
+		Avatar->OnRangedComboReady.RemoveAll(this);
+		Avatar->OnRangedComboReady.AddUObject(this, &AAscendPlayerController::ExecuteQueuedRangedAttack);
+	}
 	if (!InputConfig.IsEmpty())
 	{
 		BindingInput(InputConfig);
@@ -34,9 +43,17 @@ void AAscendPlayerController::OnPossess(APawn* aPawn)
 
 void AAscendPlayerController::OnUnPossess()
 {
+	if (auto* Avatar = Cast<AAscendCharacterBase>(GetPawn()))
+	{
+		Avatar->OnRangedAttackFinished.RemoveAll(this);
+		Avatar->OnRangedComboReady.RemoveAll(this);
+	}
+	GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+	bQueuedRangedLight = false;
 	LockedTarget.Reset();
 	bTargetSwitchLatched = false;
 	GamepadMoveValue = FVector2D::ZeroVector;
+	LastMoveDirection = FVector::ZeroVector;
 	GamepadSwitchValue = FVector2D::ZeroVector;
 	NextDodgeTime = 0.0;
 	Super::OnUnPossess();
@@ -48,9 +65,12 @@ void AAscendPlayerController::PlayerTick(float DeltaTime)
 	UpdateMouseFacing();
 }
 
-void AAscendPlayerController::UpdateMouseFacing()
+void AAscendPlayerController::UpdateMouseFacing(bool bContinueCombo)
 {
 	APawn* ControlledPawn = GetPawn();
+	if (const auto* Avatar = Cast<AAscendCharacterBase>(ControlledPawn); Avatar && Avatar->IsRangedAttacking() && !bContinueCombo) { return; }
+	if (ControlledPawn)
+		if (const auto* Melee = ControlledPawn->FindComponentByClass<UAscendMeleeCombatComponent>(); Melee && Melee->IsAttacking()) { return; }
 	if (bUsingGamepad || !IsLocalController() || !ControlledPawn || IsPaused())
 	{
 		return;
@@ -138,14 +158,112 @@ void AAscendPlayerController::Input_AbilityInputTagReleased(FGameplayTag InputTa
 	}
 }
 
+void AAscendPlayerController::PrepareAttackFacing(bool bContinueCombo)
+{
+	APawn* Avatar = GetPawn();
+	if (!Avatar) { return; }
+	const auto* Combat = Avatar->FindComponentByClass<UAscendMeleeCombatComponent>();
+	const auto* CombatCharacter = Cast<AAscendCharacterBase>(Avatar);
+	if ((Combat && Combat->IsAttacking()) || (CombatCharacter && CombatCharacter->IsRangedAttacking() && !bContinueCombo)) { return; }
+	UpdateMouseFacing(bContinueCombo);
+	if (bUsingGamepad)
+	{
+		RefreshLockTarget();
+		if (LockedTarget.IsValid())
+		{
+			const FVector Direction = (LockedTarget->GetActorLocation() - Avatar->GetActorLocation()).GetSafeNormal2D();
+			if (!Direction.IsNearlyZero()) { Avatar->SetActorRotation(Direction.Rotation()); }
+		}
+	}
+}
+
 void AAscendPlayerController::FireLightAttack()
 {
+	if (const auto* Avatar = Cast<AAscendCharacterBase>(GetPawn()); Avatar && Avatar->IsRangedAttacking())
+	{
+		if (!Avatar->IsRangedHeavyAttacking())
+		{
+			bQueuedRangedLight = true;
+			QueuedRangedInputTime = GetWorld()->GetTimeSeconds();
+			ExecuteQueuedRangedAttack();
+		}
+		return;
+	}
+	// A fresh input consumes any already scheduled follow-up instead of doubling it.
+	GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+	bQueuedRangedLight = false;
+	PrepareAttackFacing();
+	if (APawn* Avatar = GetPawn())
+		if (auto* Melee = Avatar->FindComponentByClass<UAscendMeleeCombatComponent>(); Melee && Melee->Profile && Melee->Profile->CombatStyle == EAscendCombatProfileStyle::Saber)
+		{
+			Melee->RequestAttack(false);
+			return;
+		}
+	if (const auto* Combat = GetPawn() ? GetPawn()->FindComponentByClass<UAscendMeleeCombatComponent>() : nullptr; Combat && Combat->Profile)
+	{
+		if (auto* RangedCharacter = Cast<AAscendCharacterBase>(GetPawn())) { RangedCharacter->PlayRangedAttackAnimation(); }
+		return;
+	}
 	FireRangedProjectile(LightAttackDamage, LightProjectileSpeed, LightProjectileRadius);
+}
+
+void AAscendPlayerController::HandleRangedAttackFinished(bool bInterrupted)
+{
+	if (bInterrupted)
+	{
+		bQueuedRangedLight = false;
+		GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+		return;
+	}
+	if (bQueuedRangedLight)
+	{
+		QueuedRangedAttackTimer = GetWorldTimerManager().SetTimerForNextTick(
+			FTimerDelegate::CreateUObject(this, &AAscendPlayerController::ExecuteQueuedRangedAttack));
+	}
+}
+
+void AAscendPlayerController::ExecuteQueuedRangedAttack()
+{
+	if (!bQueuedRangedLight) { return; }
+	auto* Avatar = Cast<AAscendCharacterBase>(GetPawn());
+	const auto* Profile = Avatar && Avatar->MeleeCombat ? Avatar->MeleeCombat->Profile.Get() : nullptr;
+	if (!Avatar || Avatar->IsDead() || !Profile || GetWorld()->GetTimeSeconds() - QueuedRangedInputTime > Profile->RangedInputBufferDuration)
+	{
+		bQueuedRangedLight = false;
+		return;
+	}
+	if (Avatar->IsRangedAttacking())
+	{
+		if (!Avatar->CanAdvanceRangedCombo()) { return; }
+		PrepareAttackFacing(true);
+		if (Avatar->PlayRangedAttackAnimation(false, 0.f, true))
+		{
+			bQueuedRangedLight = false;
+			GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+		}
+		return;
+	}
+	FireLightAttack();
 }
 
 void AAscendPlayerController::FireHeavyAttack(float ChargeAlpha)
 {
+	if (const auto* Avatar = Cast<AAscendCharacterBase>(GetPawn()); Avatar && Avatar->IsRangedAttacking()) { return; }
+	GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+	bQueuedRangedLight = false;
+	PrepareAttackFacing();
+	if (APawn* Avatar = GetPawn())
+		if (auto* Melee = Avatar->FindComponentByClass<UAscendMeleeCombatComponent>(); Melee && Melee->Profile && Melee->Profile->CombatStyle == EAscendCombatProfileStyle::Saber)
+		{
+			Melee->RequestAttack(true);
+			return;
+		}
 	const float ClampedChargeAlpha = FMath::Clamp(ChargeAlpha, 0.0f, 1.0f);
+	if (const auto* Combat = GetPawn() ? GetPawn()->FindComponentByClass<UAscendMeleeCombatComponent>() : nullptr; Combat && Combat->Profile)
+	{
+		if (auto* RangedCharacter = Cast<AAscendCharacterBase>(GetPawn())) { RangedCharacter->PlayRangedAttackAnimation(true, ClampedChargeAlpha); }
+		return;
+	}
 	const float Damage = HeavyAttackDamage * FMath::Lerp(1.0f, 2.0f, ClampedChargeAlpha);
 	const float Radius = HeavyProjectileRadius * FMath::Lerp(1.0f, 1.5f, ClampedChargeAlpha);
 	FireRangedProjectile(Damage, HeavyProjectileSpeed, Radius);
@@ -160,22 +278,9 @@ void AAscendPlayerController::FireRangedProjectile(float InDamage, float InSpeed
 		return;
 	}
 
-	UpdateMouseFacing();
 	const FVector Origin = ControlledPawn->GetActorLocation() + FVector(0.0f, 0.0f, 55.0f);
 	// Top-down attacks travel horizontally along the character's current facing.
 	FVector Direction = FRotator(0.0f, ControlledPawn->GetActorRotation().Yaw, 0.0f).Vector();
-	if (bUsingGamepad)
-	{
-		RefreshLockTarget();
-		if (LockedTarget.IsValid())
-		{
-			const FVector TargetDirection = (LockedTarget->GetActorLocation() - Origin).GetSafeNormal2D();
-			if (!TargetDirection.IsNearlyZero())
-			{
-				Direction = TargetDirection;
-			}
-		}
-	}
 
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.Owner = ControlledPawn;

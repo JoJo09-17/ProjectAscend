@@ -1,6 +1,7 @@
 #include "AscendAttributeSet.h"
 
 #include "Character/Base/AscendCharacterBase.h"
+#include "Character/Enemy/AscendEnemyCharacter.h"
 #include "GameplayEffectExtension.h"
 #include "AscendGameplayTags.h"
 
@@ -187,6 +188,14 @@ void UAscendAttributeSet::HandleIncomingDamageAttribute(const FAscendAttributeSe
 	const float NewHealth = PreviousHealth - LocalDamageDone;
 	SetHealth(FMath::Clamp(NewHealth, 0.0f, GetMaxHealth()));
 	HandleZeroHealthReached(ExecutionData, PreviousHealth);
+	if (PreviousHealth > GetHealth() && GetHealth() > 0.f)
+	{
+		if (auto* Enemy = Cast<AAscendEnemyCharacter>(ExecutionData.TargetActor))
+		{
+			AActor* Causer = ExecutionData.Context.GetEffectCauser();
+			Enemy->HandleDamageReaction(Causer ? Causer : ExecutionData.SourceActor.Get(),ExecutionData.Context.GetHitResult());
+		}
+	}
 }
 
 void UAscendAttributeSet::HandleHealingAttribute()

@@ -94,3 +94,13 @@ void AAscendPlayerCharacter::SetMovementModeTag(EMovementMode MovementMode, uint
 		}
 	}
 }
+
+void AAscendPlayerCharacter::BeginPlay()
+{
+ Super::BeginPlay();
+ SpringArmComponent->bEnableCameraLag = bSmoothCameraFollow;
+ SpringArmComponent->CameraLagSpeed = CameraFollowSpeed;
+ SpringArmComponent->CameraLagMaxDistance = CameraFollowMaxDistance;
+ SpringArmComponent->bUseCameraLagSubstepping = true;
+ SpringArmComponent->CameraLagMaxTimeStep = 1.f / 120.f;
+}

@@ -1,6 +1,7 @@
 #include "Player/AscendPlayerController.h"
 
 #include "AscendGameplayTags.h"
+#include "Combat/AscendMeleeCombatComponent.h"
 #include "Character/Enemy/AscendEnemyCharacter.h"
 #include "Camera/PlayerCameraManager.h"
 #include "DrawDebugHelpers.h"
@@ -12,6 +13,7 @@
 #include "EnhancedInputComponent.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
+#include "TimerManager.h"
 
 FVector AAscendPlayerController::GamepadDirectionToWorld(const FVector2D& Stick) const
 {
@@ -30,9 +32,14 @@ void AAscendPlayerController::ProcessGamepadInput(float DeltaTime)
 	if (!bUsingGamepad) { return; }
 	if (!GamepadMoveValue.IsNearlyZero())
 	{
-		const FVector Direction = GamepadDirectionToWorld(GamepadMoveValue).GetSafeNormal2D();
-		GetPawn()->AddMovementInput(Direction, FMath::Min(GamepadMoveValue.Size(), 1.0f));
-		GetPawn()->SetActorRotation(Direction.Rotation());
+		LastMoveDirection = GamepadDirectionToWorld(GamepadMoveValue).GetSafeNormal2D();
+		const auto* Melee = GetPawn()->FindComponentByClass<UAscendMeleeCombatComponent>();
+		if ((!Melee || !Melee->IsAttacking()) && (!Avatar || !Avatar->IsRangedAttacking()))
+		{
+			const FVector Direction = GamepadDirectionToWorld(GamepadMoveValue).GetSafeNormal2D();
+			GetPawn()->AddMovementInput(Direction, FMath::Min(GamepadMoveValue.Size(), 1.0f));
+			GetPawn()->SetActorRotation(Direction.Rotation());
+		}
 	}
 	const bool Switch = GamepadSwitchValue.Size() > 0.6f && !bTargetSwitchLatched;
 	RefreshLockTarget(Switch ? GamepadSwitchValue.GetSafeNormal() : FVector2D::ZeroVector);
@@ -89,6 +96,7 @@ void AAscendPlayerController::HandleGamepadStick(const FInputActionValue& Value,
 {
 	FVector2D& StoredValue = bMove ? GamepadMoveValue : GamepadSwitchValue;
 	StoredValue = Value.Get<FVector2D>();
+	if (bMove && !StoredValue.IsNearlyZero()) { LastMoveDirection = GamepadDirectionToWorld(StoredValue).GetSafeNormal2D(); }
 	if (!StoredValue.IsNearlyZero()) { bUsingGamepad = true; }
 }
 
@@ -127,7 +135,24 @@ void AAscendPlayerController::RefreshLockTarget(const FVector2D& SwitchDirection
 		return !Blocked;
 	};
 	if (!IsCandidate(LockedTarget.Get())) { LockedTarget.Reset(); }
-	if (LockedTarget.IsValid() && SwitchDirection.IsNearlyZero()) { return; }
+	if (LockedTarget.IsValid() && SwitchDirection.IsNearlyZero())
+	{
+		AAscendEnemyCharacter* Closest = LockedTarget.Get();
+		float ClosestDistance = FVector::Dist2D(Origin, Closest->GetActorLocation());
+		for (TActorIterator<AAscendEnemyCharacter> It(GetWorld()); It; ++It)
+		{
+			AAscendEnemyCharacter* Candidate = *It;
+			if (Candidate == Closest || !IsCandidate(Candidate)) { continue; }
+			const float CandidateDistance = FVector::Dist2D(Origin, Candidate->GetActorLocation());
+			if (CandidateDistance + AutoSwitchTargetHysteresis < ClosestDistance)
+			{
+				Closest = Candidate;
+				ClosestDistance = CandidateDistance;
+			}
+		}
+		LockedTarget = Closest;
+		return;
+	}
 	const FVector Reference = LockedTarget.IsValid() ? LockedTarget->GetActorLocation() : Origin;
 	const FVector Desired = GamepadDirectionToWorld(SwitchDirection).GetSafeNormal2D();
 	AAscendEnemyCharacter* Best = nullptr;
@@ -149,17 +174,37 @@ void AAscendPlayerController::RefreshLockTarget(const FVector2D& SwitchDirection
 	if (Best) { LockedTarget = Best; }
 }
 
+FVector AAscendPlayerController::ResolveDodgeDirection() const
+{
+	if (bUsingGamepad && !GamepadMoveValue.IsNearlyZero()) { return GamepadDirectionToWorld(GamepadMoveValue).GetSafeNormal2D(); }
+	if (const APawn* Avatar = GetPawn())
+	{
+		const FVector PendingDirection = Avatar->GetPendingMovementInputVector().GetSafeNormal2D();
+		if (!PendingDirection.IsNearlyZero()) { return PendingDirection; }
+		if (!LastMoveDirection.IsNearlyZero()) { return LastMoveDirection; }
+		return Avatar->GetLastMovementInputVector().GetSafeNormal2D();
+	}
+	return FVector::ZeroVector;
+}
+
 void AAscendPlayerController::PerformGamepadDodge()
 {
 	ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn());
 	if (!ControlledCharacter || GetWorld()->GetTimeSeconds() < NextDodgeTime) { return; }
+	// Capture input before cancelling the attack clears buffered movement.
+	const FVector DodgeDirection = ResolveDodgeDirection();
+	if (DodgeDirection.IsNearlyZero()) { return; }
+	bQueuedRangedLight = false;
+	GetWorldTimerManager().ClearTimer(QueuedRangedAttackTimer);
+	LastMoveDirection = DodgeDirection;
 	UCharacterMovementComponent* Movement = ControlledCharacter->GetCharacterMovement();
+	if (AAscendCharacterBase* Avatar = Cast<AAscendCharacterBase>(ControlledCharacter); Avatar && !Avatar->TryInterruptNormalAttack()) { return; }
 	if (!Movement->IsMovingOnGround()) { return; }
 	TSharedPtr<FRootMotionSource_ConstantForce> Dodge = MakeShared<FRootMotionSource_ConstantForce>();
 	Dodge->InstanceName = TEXT("GamepadDodge");
 	Dodge->Priority = 500;
 	Dodge->AccumulateMode = ERootMotionAccumulateMode::Override;
-	Dodge->Force = ControlledCharacter->GetActorForwardVector() * FMath::Max(DodgeSpeed, 0.0f);
+	Dodge->Force = DodgeDirection * FMath::Max(DodgeSpeed, 0.0f);
 	Dodge->Duration = FMath::Max(DodgeDuration, 0.01f);
 	Dodge->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::ClampVelocity;
 	Dodge->FinishVelocityParams.ClampVelocity = Movement->MaxWalkSpeed;
